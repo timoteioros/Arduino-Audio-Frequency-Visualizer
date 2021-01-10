@@ -4,12 +4,14 @@
 
 #define SAMPLES 64
 #define SAMPLING_FREQUENCY 40000
-#define ROWS 8
-#define COLUMNS 32 
 
-// we initialize a LedControl variable, pin 50 - datapin, 6 - clock, 7 - cs, 4 - how many matrices we have
+// Initializam variabila LedControl, cu care vom comunica cu matricea 
+// pin 50 - datapin, pin 7 - clock, pin 6 - cs, pin 4 - cate matrici de 8x8 avem cascadate
 LedControl lc = LedControl(50, 7, 6, 4);
 
+// Initializam variabila FFT, cu care vom face transformata fourier
+// Este nevoie de 2 vectori, unul de indici reali, altul de indici imaginari
+// Mai este nevoie sa precizam si cate sample-uri vom face pe loop si la ce frecventa dorim (40.000 / 2 = 20.000 kHz)
 double vReal[SAMPLES];
 double vImg[SAMPLES];
 arduinoFFT FFT = arduinoFFT(vReal, vImg, SAMPLES, SAMPLING_FREQUENCY);
@@ -19,13 +21,14 @@ unsigned long sampling_time;
 void setup() {
   Serial.begin(2000000);
 
-  // for each matrix, we have to initialize it, since they start in sleep mode
-  // for each matrix, we set the intensity of the leds (value between 0 and 15);
+  // Trebuie sa initalizam matricile, pentru ca acestea incep in modul sleep
+  // Trebuie setata intensitatea led-urilor
   for (int i = 0; i < lc.getDeviceCount(); i++){
     lc.shutdown(i, false);
     lc.setIntensity(i, 1);
   }
-  lc.setColumn(0, 0, B11111111);
+  
+  // De la pin-ul A7 vom primi input-ul in real-time
   pinMode(A7, INPUT);
 }
 
@@ -42,53 +45,71 @@ float conversionTime;
 void loop() { 
   newTime = micros();
 
-  // Sampling the input data
+  // Facem sample pe datele de ce le primim (64 sample-uri)
+  // Vectorul de coeficienti imaginari ramane pe 0
   for (int i = 0; i < SAMPLES; i++){
-    vReal[i] = analogRead(A7);
-    Serial.println(vReal[i]);
+    vReal[i] = smooth();
     vImg[i] = 0.0;
   }
 
-  // Fast Furier on that data
+  // Facem Fast Fourier Transform pe vectorul de reali si imaginari
   FFT.DCRemoval();
   FFT.Windowing(FFT_WIN_TYP_HAMMING, FFT_FORWARD);
   FFT.Compute(FFT_FORWARD);
   FFT.ComplexToMagnitude();
 
 
-  // printing on the matrix
+  // Pentru fiecare matrice de 8x8, calculam care led-uri sa fie aprinse si care nu
   for (int k = 0; k < lc.getDeviceCount(); k++){
 
     for(int j = 0; j < 8; j++){
       valueVector[j] = 0;
     }
 
-    // Taking the FFT and converting it to led bands
+    // Luam datele prelucrate cu FFT din vReal, si le transformam in byte-uri care reprezinta
+    // care led-uri vor fi pornite si care stinse pe fiecare coloana
     for(int j = 0; j < 8; j++){
       value = vReal[k * 8 + j];
+      
       if (value > 80) 
         value = 80;
       value /= 8.0;
+      
       valueVector[j] = setBandLeds( (int) value);  
     } 
 
-    //Making the data into row data
-    mask = 128;
+    // Din date coloana, le transformam in date rand, deoarece setColumn este o functie foarte lenta
+    // setRow este o functie cu mult mai rapida
+    mask = 128; 
     for (int j = 0; j < 8; j++){
       x = 0;
       for(int p = 0; p < 8; p++){
-        x |= !!(valueVector[p] & mask) << (7 - p);
+        x |= !!(valueVector[7 - p] & mask) << (7 - p);
       }
       mask >>= 1;
-      lc.setRow(k, j, x);
+      lc.setRow(k, j, x); 
     }
   } 
   
   Serial.println(micros() - newTime);
-  
 }
 
-//converting a value between 1 and 8 into led data
+// Facem un average la datele de intrare, pentru a avea date mai coerente
+int smooth(){
+  int value = 0;
+  int numReadings = 5;
+
+  for (int i = 0; i < numReadings; i++){
+    value = value + analogRead(A7);
+  }
+
+  value = value / numReadings;
+
+  return value;
+}
+
+
+// Converteste o valoare intre 1 si 8 intr-un byte care reprezinta care led-uri sa fie aprinse pe fiecare coloana
 byte setBandLeds(int value) {
 
   if (value == 0)
@@ -98,7 +119,7 @@ byte setBandLeds(int value) {
   if (value == 2)
     return 3;
   if (value == 3)
-    return 7;
+    return 7; 
   if (value == 4) 
     return 15;
   if (value == 5)
@@ -108,5 +129,5 @@ byte setBandLeds(int value) {
   if (value == 7)
     return 127;
   if (value == 8) 
-    return 255;
+    return 255; 
 }
